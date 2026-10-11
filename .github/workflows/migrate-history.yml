@@ -1,0 +1,49 @@
+name: Migrate Commercial Wines history
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  split:
+    if: github.repository == 'rulevd21/commercial-wines' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Split the pinned public source history and verify exact tree
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BOOTSTRAP_SHA: ${{ github.sha }}
+          SOURCE_SHA: e1cbd1f14c9f583bdf4579544c09f5f67d77e5ae
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --no-tags https://github.com/rulevd21/R-Form.git source
+          cd source
+          test "$(git rev-parse origin/main)" = "$SOURCE_SHA"
+          source_tree="$(git rev-parse "$SOURCE_SHA:commercial-wines")"
+          source_blob="$(git rev-parse "$SOURCE_SHA:commercial-wines/index.html")"
+          split_sha="$(git subtree split --prefix=commercial-wines "$SOURCE_SHA")"
+          test "$(git rev-parse "$split_sha^{tree}")" = "$source_tree"
+          test "$(git rev-parse "$split_sha:index.html")" = "$source_blob"
+          git show "$SOURCE_SHA:commercial-wines/index.html" > ../source.html
+          git show "$split_sha:index.html" > ../destination.html
+          cmp ../source.html ../destination.html
+          git config --local credential.helper '!f() { printf "%s\n" "username=x-access-token" "password=$GH_TOKEN"; }; f'
+          git remote add destination https://github.com/rulevd21/commercial-wines.git
+          destination_head="$(git ls-remote destination refs/heads/main | cut -f1)"
+          test "$destination_head" = "$BOOTSTRAP_SHA"
+          git fetch destination main
+          test "$(git ls-tree --name-only FETCH_HEAD)" = ".github"
+          git push --force-with-lease="refs/heads/main:$BOOTSTRAP_SHA" destination "$split_sha:refs/heads/main"
+          git fetch destination main
+          test "$(git rev-parse FETCH_HEAD)" = "$split_sha"
+          test "$(git rev-parse FETCH_HEAD^{tree})" = "$source_tree"
+          {
+            echo "DESTINATION_READBACK: PASS"
+            echo "Source main: $SOURCE_SHA"
+            echo "Split main: $split_sha"
+            echo "Exact subtree tree: $source_tree"
+            echo "Exact index blob: $source_blob"
+            echo "Split history commits: $(git rev-list --count "$split_sha")"
+            sha256sum ../source.html ../destination.html
+          } | tee -a "$GITHUB_STEP_SUMMARY"
