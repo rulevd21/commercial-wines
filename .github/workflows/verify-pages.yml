@@ -1,0 +1,37 @@
+name: Verify Commercial Wines public artifact
+on:
+  push:
+    branches: [migration-control]
+    paths: [.github/workflows/verify-pages.yml]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Compare source, destination, and live Pages bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL https://raw.githubusercontent.com/rulevd21/R-Form/e1cbd1f14c9f583bdf4579544c09f5f67d77e5ae/commercial-wines/index.html -o source.html
+          curl -fsSL https://raw.githubusercontent.com/rulevd21/commercial-wines/main/index.html -o destination.html
+          cmp source.html destination.html
+          test "$(sha256sum source.html | cut -d' ' -f1)" = "2cf9060ce1fe96e7efa5d40491865468232f71199609bfc7093d65fb2ba98d55"
+          page_ok=false
+          for attempt in $(seq 1 24); do
+            status="$(curl -L -sS --max-time 15 -o pages.html -w '%{http_code}' https://rulevd21.github.io/commercial-wines/ || true)"
+            if [[ "$status" = 200 ]] && cmp -s source.html pages.html; then
+              page_ok=true
+              break
+            fi
+            sleep 5
+          done
+          test "$page_ok" = true
+          {
+            echo "DESTINATION_READBACK: PASS"
+            echo "PAGES_READBACK: PASS"
+            echo "HTTP status: $status"
+            echo "Bytes: $(wc -c < pages.html)"
+            sha256sum source.html destination.html pages.html
+          } | tee -a "$GITHUB_STEP_SUMMARY"
